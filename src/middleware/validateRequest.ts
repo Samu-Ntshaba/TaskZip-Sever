@@ -1,9 +1,10 @@
 import { NextFunction, Request, Response } from "express";
-import { ZodSchema } from "zod";
+import { z, ZodTypeAny } from "zod";
 import { HttpError } from "../utils/errors";
 
-export const validateRequest = (schema: ZodSchema) => {
-  return (req: Request, _res: Response, next: NextFunction) => {
+export const validateRequest =
+  <S extends ZodTypeAny>(schema: S) =>
+  (req: Request, _res: Response, next: NextFunction) => {
     const result = schema.safeParse({
       body: req.body,
       query: req.query,
@@ -11,11 +12,10 @@ export const validateRequest = (schema: ZodSchema) => {
     });
 
     if (!result.success) {
-      const message = result.error.issues.map((issue) => issue.message).join(", ");
+      const message = result.error.issues.map((i) => i.message).join(", ");
       return next(new HttpError(message, 400));
     }
 
-    req.validated = result.data;
+    req.validated = result.data as z.infer<S>;
     return next();
   };
-};

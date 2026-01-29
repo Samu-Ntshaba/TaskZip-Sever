@@ -1,4 +1,4 @@
-import { Profile, User } from "../generated/prisma";
+import { Profile, User } from "@prisma/client";
 import { env } from "../env";
 import { createSupabaseClient } from "../services/supabaseService";
 

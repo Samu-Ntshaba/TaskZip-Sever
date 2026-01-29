@@ -1,16 +1,15 @@
 import "express";
+import type { UserRole } from "./auth";
 
-declare module "express-serve-static-core" {
-  interface Request {
-    user?: {
-      userId: string;
-      role: string;
-    };
-    validated?: {
-      body?: unknown;
-      query?: unknown;
-      params?: unknown;
-    };
+declare global {
+  namespace Express {
+    interface Request {
+      user?: {
+        userId: string;
+        role: UserRole;
+      };
+      validated?: unknown;
+    }
   }
 }
 

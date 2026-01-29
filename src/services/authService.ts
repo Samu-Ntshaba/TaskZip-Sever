@@ -1,4 +1,5 @@
 import { prisma } from "../db";
+import { Prisma } from "@prisma/client";
 import { hashPassword, verifyPassword } from "../utils/password";
 import { generateTokenPair, hashToken } from "../utils/tokens";
 import { emailService } from "./emailService";
