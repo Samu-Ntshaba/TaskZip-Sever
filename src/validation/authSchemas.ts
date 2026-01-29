@@ -6,8 +6,12 @@ export const registerSchema = z.object({
     password: z.string().min(8),
     fullName: z.string().min(2),
     phone: z.string().min(6).optional(),
+
+    // ✅ ADD THIS
+    role: z.enum(["USER", "RUNNER"]).optional(),
   }),
 });
+
 
 export const loginSchema = z.object({
   body: z.object({
