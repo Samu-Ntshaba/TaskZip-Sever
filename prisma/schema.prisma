@@ -112,7 +112,8 @@ model Location {
 model RunnerAvailabilitySlot {
   id         String   @id @default(uuid()) @db.Uuid
   runnerId   String   @db.Uuid
-  locationId String   @db.Uuid
+  locationId String?  @db.Uuid
+  locationName String?
   dayOfWeek  Int
   startTime  String
   endTime    String
@@ -120,9 +121,9 @@ model RunnerAvailabilitySlot {
   updatedAt  DateTime @updatedAt
 
   runner   RunnerProfile @relation(fields: [runnerId], references: [id], onDelete: Cascade)
-  location Location      @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  location Location?     @relation(fields: [locationId], references: [id], onDelete: Cascade)
 
-  @@index([runnerId, dayOfWeek, locationId])
+  @@index([runnerId, dayOfWeek, locationId, locationName])
 }
 
 model QueueRequest {

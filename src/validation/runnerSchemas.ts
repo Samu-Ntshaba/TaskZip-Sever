@@ -22,20 +22,39 @@ export const updateRunnerProfileSchema = z.object({
 
 export const availabilitySlotSchema = z.object({
   body: z.object({
-    locationId: z.string().uuid(),
+    locationId: z.string().uuid().optional(),
+    locationName: z.string().min(1).optional(),
     dayOfWeek: z.number().int().min(0).max(6),
     startTime: z.string().regex(timeRegex, "Invalid start time format"),
     endTime: z.string().regex(timeRegex, "Invalid end time format"),
-  }),
+  })
+  .refine(
+    (data) =>
+      (data.locationId && !data.locationName) ||
+      (!data.locationId && data.locationName),
+    {
+      message: "Provide either locationId or locationName",
+      path: ["locationId"],
+    }
+  ),
 });
 
 export const updateAvailabilitySlotSchema = z.object({
   body: z.object({
     locationId: z.string().uuid().optional(),
+    locationName: z.string().min(1).optional(),
     dayOfWeek: z.number().int().min(0).max(6).optional(),
     startTime: z.string().regex(timeRegex, "Invalid start time format").optional(),
     endTime: z.string().regex(timeRegex, "Invalid end time format").optional(),
-  }),
+  })
+  .refine(
+    (data) =>
+      !(data.locationId && data.locationName),
+    {
+      message: "Provide either locationId or locationName, not both",
+      path: ["locationId"],
+    }
+  ),
   params: z.object({
     id: z.string().uuid(),
   }),
