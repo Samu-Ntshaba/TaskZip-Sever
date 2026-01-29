@@ -31,23 +31,35 @@ const createPrismaClient = () => {
   });
 
   return client.$extends({
-    query: {
-      review: {
-        async create({
-          args,
-          query,
-        }: {
-          args: Prisma.ReviewCreateArgs;
-          query: (args: Prisma.ReviewCreateArgs) => Promise<Prisma.ReviewGetPayload<Prisma.ReviewDefaultArgs>>;
-        }) {
-          const result = await query(args);
-          await updateRunnerRatings(client, result.requestId);
-          return result;
-        },
+  query: {
+    review: {
+      async create({ args, query }) {
+        // If caller used `select`, ensure requestId is always included
+        const nextArgs =
+          args && typeof args === "object" && "select" in args && args.select
+            ? ({
+                ...args,
+                select: { ...(args.select as any), requestId: true },
+              } as typeof args)
+            : args;
+
+        const result = await query(nextArgs as any);
+
+        // TS-safe: pull requestId out with a guard (works even if result type is generic)
+        const requestId = (result as any)?.requestId as string | undefined;
+
+        if (requestId) {
+          await updateRunnerRatings(client, requestId);
+        }
+
+        return result;
       },
     },
-  });
+  },
+});
+
 };
+
 
 type PrismaClientExtended = ReturnType<typeof createPrismaClient>;
 

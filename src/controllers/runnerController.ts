@@ -11,6 +11,13 @@ const ACTIVE_REQUEST_STATUSES: QueueRequestStatus[] = [
   "READY",
 ];
 
+// ✅ single source of truth for auth inside controllers
+const requireUserId = (req: Request): string => {
+  const userId = req.user?.userId;
+  if (!userId) throw new HttpError("Unauthorized", 401);
+  return userId;
+};
+
 const getRunnerProfileByUserId = async (userId: string) => {
   const runnerProfile = await prisma.runnerProfile.findUnique({
     where: { userId },
@@ -50,26 +57,11 @@ const resolveUpdateType = (payload: {
   etaMinutes?: number;
   note?: string;
 }) => {
-  if (payload.updateType) {
-    return payload.updateType;
-  }
-
-  if (payload.note) {
-    return "NOTE";
-  }
-
-  if (payload.etaMinutes !== undefined) {
-    return "ETA";
-  }
-
-  if (payload.currentlyServing !== undefined) {
-    return "CURRENTLY_SERVING";
-  }
-
-  if (payload.myNumber !== undefined) {
-    return "MY_NUMBER";
-  }
-
+  if (payload.updateType) return payload.updateType;
+  if (payload.note) return "NOTE";
+  if (payload.etaMinutes !== undefined) return "ETA";
+  if (payload.currentlyServing !== undefined) return "CURRENTLY_SERVING";
+  if (payload.myNumber !== undefined) return "MY_NUMBER";
   return "NOTE";
 };
 
@@ -102,9 +94,7 @@ const ensureAvailabilitySlotOverlap = async (payload: {
 };
 
 export const createRunnerProfile = asyncHandler(async (req: Request, res: Response) => {
-  if (!req.user) {
-    throw new HttpError("Unauthorized", 401);
-  }
+  const userId = requireUserId(req);
 
   const { photoPath, bio, status, phone } = (req.validated as {
     body: {
@@ -116,7 +106,7 @@ export const createRunnerProfile = asyncHandler(async (req: Request, res: Respon
   }).body;
 
   const existing = await prisma.runnerProfile.findUnique({
-    where: { userId: req.user.userId },
+    where: { userId },
   });
 
   if (existing) {
@@ -124,7 +114,7 @@ export const createRunnerProfile = asyncHandler(async (req: Request, res: Respon
   }
 
   const profile = await prisma.profile.findUnique({
-    where: { userId: req.user.userId },
+    where: { userId },
   });
 
   if (!profile) {
@@ -134,7 +124,7 @@ export const createRunnerProfile = asyncHandler(async (req: Request, res: Respon
   await prisma.$transaction(async (tx) => {
     await tx.runnerProfile.create({
       data: {
-        userId: req.user.userId,
+        userId,
         photoPath,
         bio: bio ?? null,
         status: status ?? "AVAILABLE",
@@ -149,25 +139,18 @@ export const createRunnerProfile = asyncHandler(async (req: Request, res: Respon
     }
   });
 
-  const runnerProfile = await buildRunnerProfileResponse(req.user.userId);
-
+  const runnerProfile = await buildRunnerProfileResponse(userId);
   res.status(201).json({ runnerProfile });
 });
 
 export const getRunnerProfile = asyncHandler(async (req: Request, res: Response) => {
-  if (!req.user) {
-    throw new HttpError("Unauthorized", 401);
-  }
-
-  const runnerProfile = await buildRunnerProfileResponse(req.user.userId);
-
+  const userId = requireUserId(req);
+  const runnerProfile = await buildRunnerProfileResponse(userId);
   res.json({ runnerProfile });
 });
 
 export const updateRunnerProfile = asyncHandler(async (req: Request, res: Response) => {
-  if (!req.user) {
-    throw new HttpError("Unauthorized", 401);
-  }
+  const userId = requireUserId(req);
 
   const { photoPath, bio, status, phone } = (req.validated as {
     body: {
@@ -178,7 +161,7 @@ export const updateRunnerProfile = asyncHandler(async (req: Request, res: Respon
     };
   }).body;
 
-  const runnerProfile = await getRunnerProfileByUserId(req.user.userId);
+  const runnerProfile = await getRunnerProfileByUserId(userId);
 
   if (status && runnerProfile.status === "BUSY") {
     throw new HttpError("Cannot change status while busy", 400);
@@ -196,14 +179,13 @@ export const updateRunnerProfile = asyncHandler(async (req: Request, res: Respon
 
     if (phone !== undefined) {
       await tx.profile.update({
-        where: { userId: req.user.userId },
+        where: { userId },
         data: { phone },
       });
     }
   });
 
-  const updatedRunnerProfile = await buildRunnerProfileResponse(req.user.userId);
-
+  const updatedRunnerProfile = await buildRunnerProfileResponse(userId);
   res.json({ runnerProfile: updatedRunnerProfile });
 });
 
@@ -215,64 +197,56 @@ export const listLocations = asyncHandler(async (_req: Request, res: Response) =
   res.json({ locations });
 });
 
-export const createAvailabilitySlot = asyncHandler(
-  async (req: Request, res: Response) => {
-    if (!req.user) {
-      throw new HttpError("Unauthorized", 401);
-    }
+export const createAvailabilitySlot = asyncHandler(async (req: Request, res: Response) => {
+  const userId = requireUserId(req);
 
-    const { locationId, dayOfWeek, startTime, endTime } = (req.validated as {
-      body: {
-        locationId: string;
-        dayOfWeek: number;
-        startTime: string;
-        endTime: string;
-      };
-    }).body;
+  const { locationId, dayOfWeek, startTime, endTime } = (req.validated as {
+    body: {
+      locationId: string;
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+    };
+  }).body;
 
-    if (!isStartBeforeEnd(startTime, endTime)) {
-      throw new HttpError("startTime must be before endTime", 400);
-    }
+  if (!isStartBeforeEnd(startTime, endTime)) {
+    throw new HttpError("startTime must be before endTime", 400);
+  }
 
-    const runnerProfile = await getRunnerProfileByUserId(req.user.userId);
+  const runnerProfile = await getRunnerProfileByUserId(userId);
 
-    const location = await prisma.location.findUnique({
-      where: { id: locationId },
-    });
+  const location = await prisma.location.findUnique({
+    where: { id: locationId },
+  });
 
-    if (!location) {
-      throw new HttpError("Location not found", 404);
-    }
+  if (!location) throw new HttpError("Location not found", 404);
 
-    await ensureAvailabilitySlotOverlap({
+  await ensureAvailabilitySlotOverlap({
+    runnerId: runnerProfile.id,
+    locationId,
+    dayOfWeek,
+    startTime,
+    endTime,
+  });
+
+  const slot = await prisma.runnerAvailabilitySlot.create({
+    data: {
       runnerId: runnerProfile.id,
       locationId,
       dayOfWeek,
       startTime,
       endTime,
-    });
+    },
+    include: { location: true },
+  });
 
-    const slot = await prisma.runnerAvailabilitySlot.create({
-      data: {
-        runnerId: runnerProfile.id,
-        locationId,
-        dayOfWeek,
-        startTime,
-        endTime,
-      },
-      include: { location: true },
-    });
-
-    res.status(201).json({ slot });
-  }
-);
+  res.status(201).json({ slot });
+});
 
 export const listAvailabilitySlots = asyncHandler(async (req: Request, res: Response) => {
-  if (!req.user) {
-    throw new HttpError("Unauthorized", 401);
-  }
+  const userId = requireUserId(req);
 
-  const runnerProfile = await getRunnerProfileByUserId(req.user.userId);
+  const runnerProfile = await getRunnerProfileByUserId(userId);
 
   const slots = await prisma.runnerAvailabilitySlot.findMany({
     where: { runnerId: runnerProfile.id },
@@ -283,108 +257,96 @@ export const listAvailabilitySlots = asyncHandler(async (req: Request, res: Resp
   res.json({ slots });
 });
 
-export const updateAvailabilitySlot = asyncHandler(
-  async (req: Request, res: Response) => {
-    if (!req.user) {
-      throw new HttpError("Unauthorized", 401);
-    }
+export const updateAvailabilitySlot = asyncHandler(async (req: Request, res: Response) => {
+  const userId = requireUserId(req);
 
-    const { id } = (req.validated as { params: { id: string } }).params;
-    const { locationId, dayOfWeek, startTime, endTime } = (req.validated as {
-      body: {
-        locationId?: string;
-        dayOfWeek?: number;
-        startTime?: string;
-        endTime?: string;
-      };
-    }).body;
+  const { id } = (req.validated as { params: { id: string } }).params;
+  const { locationId, dayOfWeek, startTime, endTime } = (req.validated as {
+    body: {
+      locationId?: string;
+      dayOfWeek?: number;
+      startTime?: string;
+      endTime?: string;
+    };
+  }).body;
 
-    const runnerProfile = await getRunnerProfileByUserId(req.user.userId);
+  const runnerProfile = await getRunnerProfileByUserId(userId);
 
-    const existingSlot = await prisma.runnerAvailabilitySlot.findUnique({
-      where: { id },
-    });
+  const existingSlot = await prisma.runnerAvailabilitySlot.findUnique({
+    where: { id },
+  });
 
-    if (!existingSlot || existingSlot.runnerId !== runnerProfile.id) {
-      throw new HttpError("Availability slot not found", 404);
-    }
+  if (!existingSlot || existingSlot.runnerId !== runnerProfile.id) {
+    throw new HttpError("Availability slot not found", 404);
+  }
 
-    const nextLocationId = locationId ?? existingSlot.locationId;
-    const nextDayOfWeek = dayOfWeek ?? existingSlot.dayOfWeek;
-    const nextStart = startTime ?? existingSlot.startTime;
-    const nextEnd = endTime ?? existingSlot.endTime;
+  const nextLocationId = locationId ?? existingSlot.locationId;
+  const nextDayOfWeek = dayOfWeek ?? existingSlot.dayOfWeek;
+  const nextStart = startTime ?? existingSlot.startTime;
+  const nextEnd = endTime ?? existingSlot.endTime;
 
-    if (locationId) {
-      const location = await prisma.location.findUnique({ where: { id: locationId } });
-      if (!location) {
-        throw new HttpError("Location not found", 404);
-      }
-    }
+  if (locationId) {
+    const location = await prisma.location.findUnique({ where: { id: locationId } });
+    if (!location) throw new HttpError("Location not found", 404);
+  }
 
-    if (!isStartBeforeEnd(nextStart, nextEnd)) {
-      throw new HttpError("startTime must be before endTime", 400);
-    }
+  if (!isStartBeforeEnd(nextStart, nextEnd)) {
+    throw new HttpError("startTime must be before endTime", 400);
+  }
 
-    await ensureAvailabilitySlotOverlap({
-      runnerId: runnerProfile.id,
+  await ensureAvailabilitySlotOverlap({
+    runnerId: runnerProfile.id,
+    locationId: nextLocationId,
+    dayOfWeek: nextDayOfWeek,
+    startTime: nextStart,
+    endTime: nextEnd,
+    excludeId: existingSlot.id,
+  });
+
+  const updatedSlot = await prisma.runnerAvailabilitySlot.update({
+    where: { id: existingSlot.id },
+    data: {
       locationId: nextLocationId,
       dayOfWeek: nextDayOfWeek,
       startTime: nextStart,
       endTime: nextEnd,
-      excludeId: existingSlot.id,
-    });
+    },
+    include: { location: true },
+  });
 
-    const updatedSlot = await prisma.runnerAvailabilitySlot.update({
-      where: { id: existingSlot.id },
-      data: {
-        locationId: nextLocationId,
-        dayOfWeek: nextDayOfWeek,
-        startTime: nextStart,
-        endTime: nextEnd,
-      },
-      include: { location: true },
-    });
+  res.json({ slot: updatedSlot });
+});
 
-    res.json({ slot: updatedSlot });
+export const deleteAvailabilitySlot = asyncHandler(async (req: Request, res: Response) => {
+  const userId = requireUserId(req);
+
+  const { id } = (req.validated as { params: { id: string } }).params;
+
+  const runnerProfile = await getRunnerProfileByUserId(userId);
+
+  const existingSlot = await prisma.runnerAvailabilitySlot.findUnique({
+    where: { id },
+  });
+
+  if (!existingSlot || existingSlot.runnerId !== runnerProfile.id) {
+    throw new HttpError("Availability slot not found", 404);
   }
-);
 
-export const deleteAvailabilitySlot = asyncHandler(
-  async (req: Request, res: Response) => {
-    if (!req.user) {
-      throw new HttpError("Unauthorized", 401);
-    }
-
-    const { id } = (req.validated as { params: { id: string } }).params;
-
-    const runnerProfile = await getRunnerProfileByUserId(req.user.userId);
-
-    const existingSlot = await prisma.runnerAvailabilitySlot.findUnique({
-      where: { id },
-    });
-
-    if (!existingSlot || existingSlot.runnerId !== runnerProfile.id) {
-      throw new HttpError("Availability slot not found", 404);
-    }
-
-    await prisma.runnerAvailabilitySlot.delete({ where: { id } });
-
-    res.json({ message: "Availability slot deleted" });
-  }
-);
+  await prisma.runnerAvailabilitySlot.delete({ where: { id } });
+  res.json({ message: "Availability slot deleted" });
+});
 
 export const listRunnerRequests = asyncHandler(async (req: Request, res: Response) => {
-  if (!req.user) {
-    throw new HttpError("Unauthorized", 401);
-  }
+  const userId = requireUserId(req);
 
   const { status } = (req.validated as { query: { status?: QueueRequestStatus } }).query;
 
-  const runnerProfile = await getRunnerProfileByUserId(req.user.userId);
+  const runnerProfile = await getRunnerProfileByUserId(userId);
 
-  const statuses = status
+  // ✅ important: keep this typed as QueueRequestStatus[]
+  const statuses: QueueRequestStatus[] = status
     ? [status]
-    : ["CREATED", "ACCEPTED", "IN_QUEUE", "UPDATING", "READY"];
+    : (["CREATED", ...ACTIVE_REQUEST_STATUSES] as QueueRequestStatus[]);
 
   const requests = await prisma.queueRequest.findMany({
     where: {
@@ -408,329 +370,253 @@ export const listRunnerRequests = asyncHandler(async (req: Request, res: Respons
   res.json({ requests });
 });
 
-export const acceptRunnerRequest = asyncHandler(
-  async (req: Request, res: Response) => {
-    if (!req.user) {
-      throw new HttpError("Unauthorized", 401);
+export const acceptRunnerRequest = asyncHandler(async (req: Request, res: Response) => {
+  const userId = requireUserId(req);
+
+  const { id } = (req.validated as { params: { id: string } }).params;
+
+  const runnerProfile = await getRunnerProfileByUserId(userId);
+
+  if (runnerProfile.status === "OFFLINE") {
+    throw new HttpError("Runner is offline", 400);
+  }
+
+  const updatedRequest = await prisma.$transaction(async (tx) => {
+    const request = await tx.queueRequest.findUnique({ where: { id } });
+    if (!request) throw new HttpError("Queue request not found", 404);
+
+    if (request.runnerId !== runnerProfile.id) throw new HttpError("Forbidden", 403);
+    if (request.status !== "CREATED") {
+      throw new HttpError("Request is not available for acceptance", 400);
     }
 
-    const { id } = (req.validated as { params: { id: string } }).params;
-
-    const runnerProfile = await getRunnerProfileByUserId(req.user.userId);
-
-    if (runnerProfile.status === "OFFLINE") {
-      throw new HttpError("Runner is offline", 400);
-    }
-
-    const updatedRequest = await prisma.$transaction(async (tx) => {
-      const request = await tx.queueRequest.findUnique({ where: { id } });
-
-      if (!request) {
-        throw new HttpError("Queue request not found", 404);
-      }
-
-      if (request.runnerId !== runnerProfile.id) {
-        throw new HttpError("Forbidden", 403);
-      }
-
-      if (request.status !== "CREATED") {
-        throw new HttpError("Request is not available for acceptance", 400);
-      }
-
-      const activeRequest = await tx.queueRequest.findFirst({
-        where: {
-          runnerId: runnerProfile.id,
-          status: { in: ACTIVE_REQUEST_STATUSES },
-        },
-      });
-
-      if (activeRequest) {
-        throw new HttpError("Runner already has an active job", 400);
-      }
-
-      const acceptedRequest = await tx.queueRequest.update({
-        where: { id: request.id },
-        data: { status: "ACCEPTED" },
-      });
-
-      await tx.runnerProfile.update({
-        where: { id: runnerProfile.id },
-        data: { status: "BUSY" },
-      });
-
-      return acceptedRequest;
+    const activeRequest = await tx.queueRequest.findFirst({
+      where: { runnerId: runnerProfile.id, status: { in: ACTIVE_REQUEST_STATUSES } },
     });
 
-    res.json({ request: updatedRequest });
-  }
-);
+    if (activeRequest) throw new HttpError("Runner already has an active job", 400);
 
-export const rejectRunnerRequest = asyncHandler(
-  async (req: Request, res: Response) => {
-    if (!req.user) {
-      throw new HttpError("Unauthorized", 401);
-    }
-
-    const { id } = (req.validated as { params: { id: string } }).params;
-
-    const runnerProfile = await getRunnerProfileByUserId(req.user.userId);
-
-    const updatedRequest = await prisma.$transaction(async (tx) => {
-      const request = await tx.queueRequest.findUnique({ where: { id } });
-
-      if (!request) {
-        throw new HttpError("Queue request not found", 404);
-      }
-
-      if (request.runnerId !== runnerProfile.id) {
-        throw new HttpError("Forbidden", 403);
-      }
-
-      if (request.status !== "CREATED") {
-        throw new HttpError("Only created requests can be rejected", 400);
-      }
-
-      return tx.queueRequest.update({
-        where: { id: request.id },
-        data: { status: "CANCELLED" },
-      });
+    const acceptedRequest = await tx.queueRequest.update({
+      where: { id: request.id },
+      data: { status: "ACCEPTED" },
     });
 
-    res.json({ request: updatedRequest });
-  }
-);
-
-export const startRunnerRequest = asyncHandler(
-  async (req: Request, res: Response) => {
-    if (!req.user) {
-      throw new HttpError("Unauthorized", 401);
-    }
-
-    const { id } = (req.validated as { params: { id: string } }).params;
-
-    const runnerProfile = await getRunnerProfileByUserId(req.user.userId);
-
-    const updatedRequest = await prisma.$transaction(async (tx) => {
-      const request = await tx.queueRequest.findUnique({ where: { id } });
-
-      if (!request) {
-        throw new HttpError("Queue request not found", 404);
-      }
-
-      if (request.runnerId !== runnerProfile.id) {
-        throw new HttpError("Forbidden", 403);
-      }
-
-      if (request.status !== "ACCEPTED") {
-        throw new HttpError("Only accepted requests can be started", 400);
-      }
-
-      const updated = await tx.queueRequest.update({
-        where: { id: request.id },
-        data: { status: "IN_QUEUE" },
-      });
-
-      await tx.queueUpdate.create({
-        data: {
-          requestId: request.id,
-          updateType: "JOINED_QUEUE",
-          note: "Runner joined the queue",
-        },
-      });
-
-      return updated;
+    await tx.runnerProfile.update({
+      where: { id: runnerProfile.id },
+      data: { status: "BUSY" },
     });
 
-    res.json({ request: updatedRequest });
-  }
-);
+    return acceptedRequest;
+  });
 
-export const readyRunnerRequest = asyncHandler(
-  async (req: Request, res: Response) => {
-    if (!req.user) {
-      throw new HttpError("Unauthorized", 401);
+  res.json({ request: updatedRequest });
+});
+
+export const rejectRunnerRequest = asyncHandler(async (req: Request, res: Response) => {
+  const userId = requireUserId(req);
+
+  const { id } = (req.validated as { params: { id: string } }).params;
+
+  const runnerProfile = await getRunnerProfileByUserId(userId);
+
+  const updatedRequest = await prisma.$transaction(async (tx) => {
+    const request = await tx.queueRequest.findUnique({ where: { id } });
+    if (!request) throw new HttpError("Queue request not found", 404);
+
+    if (request.runnerId !== runnerProfile.id) throw new HttpError("Forbidden", 403);
+    if (request.status !== "CREATED") {
+      throw new HttpError("Only created requests can be rejected", 400);
     }
 
-    const { id } = (req.validated as { params: { id: string } }).params;
+    return tx.queueRequest.update({
+      where: { id: request.id },
+      data: { status: "CANCELLED" },
+    });
+  });
 
-    const runnerProfile = await getRunnerProfileByUserId(req.user.userId);
+  res.json({ request: updatedRequest });
+});
 
-    const updatedRequest = await prisma.$transaction(async (tx) => {
-      const request = await tx.queueRequest.findUnique({ where: { id } });
+export const startRunnerRequest = asyncHandler(async (req: Request, res: Response) => {
+  const userId = requireUserId(req);
 
-      if (!request) {
-        throw new HttpError("Queue request not found", 404);
-      }
+  const { id } = (req.validated as { params: { id: string } }).params;
 
-      if (request.runnerId !== runnerProfile.id) {
-        throw new HttpError("Forbidden", 403);
-      }
+  const runnerProfile = await getRunnerProfileByUserId(userId);
 
-      if (!["IN_QUEUE", "UPDATING"].includes(request.status)) {
-        throw new HttpError("Only in-queue requests can be marked ready", 400);
-      }
+  const updatedRequest = await prisma.$transaction(async (tx) => {
+    const request = await tx.queueRequest.findUnique({ where: { id } });
+    if (!request) throw new HttpError("Queue request not found", 404);
 
-      const updated = await tx.queueRequest.update({
-        where: { id: request.id },
-        data: { status: "READY" },
-      });
+    if (request.runnerId !== runnerProfile.id) throw new HttpError("Forbidden", 403);
+    if (request.status !== "ACCEPTED") {
+      throw new HttpError("Only accepted requests can be started", 400);
+    }
 
-      await tx.queueUpdate.create({
-        data: {
-          requestId: request.id,
-          updateType: "STATUS_CHANGE",
-          note: "Runner marked the job as ready",
-        },
-      });
-
-      return updated;
+    const updated = await tx.queueRequest.update({
+      where: { id: request.id },
+      data: { status: "IN_QUEUE" },
     });
 
-    res.json({ request: updatedRequest });
-  }
-);
-
-export const completeRunnerRequest = asyncHandler(
-  async (req: Request, res: Response) => {
-    if (!req.user) {
-      throw new HttpError("Unauthorized", 401);
-    }
-
-    const { id } = (req.validated as { params: { id: string } }).params;
-
-    const runnerProfile = await getRunnerProfileByUserId(req.user.userId);
-
-    const updatedRequest = await prisma.$transaction(async (tx) => {
-      const request = await tx.queueRequest.findUnique({ where: { id } });
-
-      if (!request) {
-        throw new HttpError("Queue request not found", 404);
-      }
-
-      if (request.runnerId !== runnerProfile.id) {
-        throw new HttpError("Forbidden", 403);
-      }
-
-      if (request.status !== "READY") {
-        throw new HttpError("Only ready requests can be completed", 400);
-      }
-
-      const updated = await tx.queueRequest.update({
-        where: { id: request.id },
-        data: { status: "COMPLETED" },
-      });
-
-      await tx.queueUpdate.create({
-        data: {
-          requestId: request.id,
-          updateType: "STATUS_CHANGE",
-          note: "Runner completed the job",
-        },
-      });
-
-      await tx.runnerProfile.update({
-        where: { id: runnerProfile.id },
-        data: {
-          totalJobsCompleted: { increment: 1 },
-          status: "AVAILABLE",
-        },
-      });
-
-      return updated;
+    await tx.queueUpdate.create({
+      data: {
+        requestId: request.id,
+        updateType: "JOINED_QUEUE",
+        note: "Runner joined the queue",
+      },
     });
 
-    res.json({ request: updatedRequest });
-  }
-);
+    return updated;
+  });
 
-export const updateRunnerRequest = asyncHandler(
-  async (req: Request, res: Response) => {
-    if (!req.user) {
-      throw new HttpError("Unauthorized", 401);
+  res.json({ request: updatedRequest });
+});
+
+export const readyRunnerRequest = asyncHandler(async (req: Request, res: Response) => {
+  const userId = requireUserId(req);
+
+  const { id } = (req.validated as { params: { id: string } }).params;
+
+  const runnerProfile = await getRunnerProfileByUserId(userId);
+
+  const updatedRequest = await prisma.$transaction(async (tx) => {
+    const request = await tx.queueRequest.findUnique({ where: { id } });
+    if (!request) throw new HttpError("Queue request not found", 404);
+
+    if (request.runnerId !== runnerProfile.id) throw new HttpError("Forbidden", 403);
+
+    if (!["IN_QUEUE", "UPDATING"].includes(request.status)) {
+      throw new HttpError("Only in-queue requests can be marked ready", 400);
     }
 
-    const { id } = (req.validated as { params: { id: string } }).params;
-    const { myNumber, currentlyServing, etaMinutes, note, updateType } = (req.validated as {
-      body: {
-        myNumber?: number;
-        currentlyServing?: number;
-        etaMinutes?: number;
-        note?: string;
-        updateType?: QueueUpdateType;
-      };
-    }).body;
+    const updated = await tx.queueRequest.update({
+      where: { id: request.id },
+      data: { status: "READY" },
+    });
 
-    const runnerProfile = await getRunnerProfileByUserId(req.user.userId);
+    await tx.queueUpdate.create({
+      data: {
+        requestId: request.id,
+        updateType: "STATUS_CHANGE",
+        note: "Runner marked the job as ready",
+      },
+    });
 
-    const updatedRequest = await prisma.$transaction(async (tx) => {
-      const request = await tx.queueRequest.findUnique({ where: { id } });
+    return updated;
+  });
 
-      if (!request) {
-        throw new HttpError("Queue request not found", 404);
-      }
+  res.json({ request: updatedRequest });
+});
 
-      if (request.runnerId !== runnerProfile.id) {
-        throw new HttpError("Forbidden", 403);
-      }
+export const completeRunnerRequest = asyncHandler(async (req: Request, res: Response) => {
+  const userId = requireUserId(req);
 
-      if (["COMPLETED", "CANCELLED"].includes(request.status)) {
-        throw new HttpError("Cannot update a completed or cancelled job", 400);
-      }
+  const { id } = (req.validated as { params: { id: string } }).params;
 
-      const derivedUpdateType = resolveUpdateType({
-        updateType,
+  const runnerProfile = await getRunnerProfileByUserId(userId);
+
+  const updatedRequest = await prisma.$transaction(async (tx) => {
+    const request = await tx.queueRequest.findUnique({ where: { id } });
+    if (!request) throw new HttpError("Queue request not found", 404);
+
+    if (request.runnerId !== runnerProfile.id) throw new HttpError("Forbidden", 403);
+    if (request.status !== "READY") {
+      throw new HttpError("Only ready requests can be completed", 400);
+    }
+
+    const updated = await tx.queueRequest.update({
+      where: { id: request.id },
+      data: { status: "COMPLETED" },
+    });
+
+    await tx.queueUpdate.create({
+      data: {
+        requestId: request.id,
+        updateType: "STATUS_CHANGE",
+        note: "Runner completed the job",
+      },
+    });
+
+    await tx.runnerProfile.update({
+      where: { id: runnerProfile.id },
+      data: {
+        totalJobsCompleted: { increment: 1 },
+        status: "AVAILABLE",
+      },
+    });
+
+    return updated;
+  });
+
+  res.json({ request: updatedRequest });
+});
+
+export const updateRunnerRequest = asyncHandler(async (req: Request, res: Response) => {
+  const userId = requireUserId(req);
+
+  const { id } = (req.validated as { params: { id: string } }).params;
+  const { myNumber, currentlyServing, etaMinutes, note, updateType } = (req.validated as {
+    body: {
+      myNumber?: number;
+      currentlyServing?: number;
+      etaMinutes?: number;
+      note?: string;
+      updateType?: QueueUpdateType;
+    };
+  }).body;
+
+  const runnerProfile = await getRunnerProfileByUserId(userId);
+
+  const updatedRequest = await prisma.$transaction(async (tx) => {
+    const request = await tx.queueRequest.findUnique({ where: { id } });
+    if (!request) throw new HttpError("Queue request not found", 404);
+
+    if (request.runnerId !== runnerProfile.id) throw new HttpError("Forbidden", 403);
+    if (["COMPLETED", "CANCELLED"].includes(request.status)) {
+      throw new HttpError("Cannot update a completed or cancelled job", 400);
+    }
+
+    const derivedUpdateType = resolveUpdateType({
+      updateType,
+      myNumber,
+      currentlyServing,
+      etaMinutes,
+      note,
+    });
+
+    await tx.queueUpdate.create({
+      data: {
+        requestId: request.id,
+        updateType: derivedUpdateType,
         myNumber,
         currentlyServing,
         etaMinutes,
         note,
-      });
-
-      await tx.queueUpdate.create({
-        data: {
-          requestId: request.id,
-          updateType: derivedUpdateType,
-          myNumber,
-          currentlyServing,
-          etaMinutes,
-          note,
-        },
-      });
-
-      const shouldSetUpdating =
-        request.status === "ACCEPTED" || request.status === "IN_QUEUE";
-
-      const updated = await tx.queueRequest.update({
-        where: { id: request.id },
-        data: { status: shouldSetUpdating ? "UPDATING" : request.status },
-      });
-
-      return updated;
+      },
     });
 
-    res.json({ request: updatedRequest });
-  }
-);
+    const shouldSetUpdating =
+      request.status === "ACCEPTED" || request.status === "IN_QUEUE";
+
+    return tx.queueRequest.update({
+      where: { id: request.id },
+      data: { status: shouldSetUpdating ? "UPDATING" : request.status },
+    });
+  });
+
+  res.json({ request: updatedRequest });
+});
 
 export const listRunnerReviews = asyncHandler(async (req: Request, res: Response) => {
-  if (!req.user) {
-    throw new HttpError("Unauthorized", 401);
-  }
+  const userId = requireUserId(req);
 
-  const runnerProfile = await getRunnerProfileByUserId(req.user.userId);
+  const runnerProfile = await getRunnerProfileByUserId(userId);
 
   const reviews = await prisma.review.findMany({
-    where: {
-      request: {
-        runnerId: runnerProfile.id,
-      },
-    },
+    where: { request: { runnerId: runnerProfile.id } },
     include: {
       request: {
-        select: {
-          id: true,
-          status: true,
-          createdAt: true,
-        },
+        select: { id: true, status: true, createdAt: true },
       },
     },
     orderBy: { createdAt: "desc" },
@@ -740,11 +626,9 @@ export const listRunnerReviews = asyncHandler(async (req: Request, res: Response
 });
 
 export const getRunnerStats = asyncHandler(async (req: Request, res: Response) => {
-  if (!req.user) {
-    throw new HttpError("Unauthorized", 401);
-  }
+  const userId = requireUserId(req);
 
-  const runnerProfile = await getRunnerProfileByUserId(req.user.userId);
+  const runnerProfile = await getRunnerProfileByUserId(userId);
 
   res.json({
     stats: {
