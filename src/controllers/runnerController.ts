@@ -69,16 +69,25 @@ const isStartBeforeEnd = (start: string, end: string) => start < end;
 
 const ensureAvailabilitySlotOverlap = async (payload: {
   runnerId: string;
-  locationId: string;
+  locationId?: string | null;
+  locationName?: string | null;
   dayOfWeek: number;
   startTime: string;
   endTime: string;
   excludeId?: string;
 }) => {
+  if (!payload.locationId && !payload.locationName) {
+    throw new HttpError("Availability slot location is required", 400);
+  }
+
+  const locationFilter = payload.locationId
+    ? { locationId: payload.locationId }
+    : { locationName: payload.locationName };
+
   const overlap = await prisma.runnerAvailabilitySlot.findFirst({
     where: {
       runnerId: payload.runnerId,
-      locationId: payload.locationId,
+      ...locationFilter,
       dayOfWeek: payload.dayOfWeek,
       id: payload.excludeId ? { not: payload.excludeId } : undefined,
       AND: [
@@ -200,9 +209,10 @@ export const listLocations = asyncHandler(async (_req: Request, res: Response) =
 export const createAvailabilitySlot = asyncHandler(async (req: Request, res: Response) => {
   const userId = requireUserId(req);
 
-  const { locationId, dayOfWeek, startTime, endTime } = (req.validated as {
+  const { locationId, locationName, dayOfWeek, startTime, endTime } = (req.validated as {
     body: {
-      locationId: string;
+      locationId?: string;
+      locationName?: string;
       dayOfWeek: number;
       startTime: string;
       endTime: string;
@@ -215,15 +225,18 @@ export const createAvailabilitySlot = asyncHandler(async (req: Request, res: Res
 
   const runnerProfile = await getRunnerProfileByUserId(userId);
 
-  const location = await prisma.location.findUnique({
-    where: { id: locationId },
-  });
+  if (locationId) {
+    const location = await prisma.location.findUnique({
+      where: { id: locationId },
+    });
 
-  if (!location) throw new HttpError("Location not found", 404);
+    if (!location) throw new HttpError("Location not found", 404);
+  }
 
   await ensureAvailabilitySlotOverlap({
     runnerId: runnerProfile.id,
     locationId,
+    locationName,
     dayOfWeek,
     startTime,
     endTime,
@@ -232,7 +245,8 @@ export const createAvailabilitySlot = asyncHandler(async (req: Request, res: Res
   const slot = await prisma.runnerAvailabilitySlot.create({
     data: {
       runnerId: runnerProfile.id,
-      locationId,
+      locationId: locationId ?? null,
+      locationName: locationId ? null : locationName ?? null,
       dayOfWeek,
       startTime,
       endTime,
@@ -261,9 +275,10 @@ export const updateAvailabilitySlot = asyncHandler(async (req: Request, res: Res
   const userId = requireUserId(req);
 
   const { id } = (req.validated as { params: { id: string } }).params;
-  const { locationId, dayOfWeek, startTime, endTime } = (req.validated as {
+  const { locationId, locationName, dayOfWeek, startTime, endTime } = (req.validated as {
     body: {
       locationId?: string;
+      locationName?: string;
       dayOfWeek?: number;
       startTime?: string;
       endTime?: string;
@@ -280,7 +295,19 @@ export const updateAvailabilitySlot = asyncHandler(async (req: Request, res: Res
     throw new HttpError("Availability slot not found", 404);
   }
 
-  const nextLocationId = locationId ?? existingSlot.locationId;
+  let nextLocationId = existingSlot.locationId;
+  let nextLocationName = existingSlot.locationName;
+
+  if (locationId !== undefined) {
+    nextLocationId = locationId;
+    nextLocationName = null;
+  }
+
+  if (locationName !== undefined) {
+    nextLocationName = locationName;
+    nextLocationId = null;
+  }
+
   const nextDayOfWeek = dayOfWeek ?? existingSlot.dayOfWeek;
   const nextStart = startTime ?? existingSlot.startTime;
   const nextEnd = endTime ?? existingSlot.endTime;
@@ -297,6 +324,7 @@ export const updateAvailabilitySlot = asyncHandler(async (req: Request, res: Res
   await ensureAvailabilitySlotOverlap({
     runnerId: runnerProfile.id,
     locationId: nextLocationId,
+    locationName: nextLocationName,
     dayOfWeek: nextDayOfWeek,
     startTime: nextStart,
     endTime: nextEnd,
@@ -307,6 +335,7 @@ export const updateAvailabilitySlot = asyncHandler(async (req: Request, res: Res
     where: { id: existingSlot.id },
     data: {
       locationId: nextLocationId,
+      locationName: nextLocationName,
       dayOfWeek: nextDayOfWeek,
       startTime: nextStart,
       endTime: nextEnd,
