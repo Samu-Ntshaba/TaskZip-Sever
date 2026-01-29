@@ -5,6 +5,8 @@ import authRoutes from "./routes/authRoutes";
 import adminRoutes from "./routes/adminRoutes";
 import profileRoutes from "./routes/profileRoutes";
 import healthRoutes from "./routes/healthRoutes";
+import runnerRoutes from "./routes/runnerRoutes";
+import locationRoutes from "./routes/locationRoutes";
 import { errorHandler } from "./middleware/errorHandler";
 import { createNotFoundError } from "./utils/errors";
 
@@ -32,6 +34,8 @@ app.get(apiBasePath, (_req, res) => {
 app.use(`${apiBasePath}/auth`, authRoutes);
 app.use(`${apiBasePath}/admin`, adminRoutes);
 app.use(`${apiBasePath}/profile`, profileRoutes);
+app.use(`${apiBasePath}/runner`, runnerRoutes);
+app.use(`${apiBasePath}/locations`, locationRoutes);
 app.use(`${apiBasePath}/health`, healthRoutes);
 
 app.use((_req, _res, next) => {
