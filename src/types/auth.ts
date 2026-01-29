@@ -1,4 +1,4 @@
-export type UserRole = "ADMIN" | "USER";
+export type UserRole = "ADMIN" | "USER" | "RUNNER";
 
 export type AccessTokenPayload = {
   userId: string;

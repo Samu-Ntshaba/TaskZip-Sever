@@ -3,7 +3,7 @@ import { env } from "../env";
 import type { AccessTokenPayload, UserRole } from "../types/auth";
 
 const isUserRole = (value: unknown): value is UserRole => {
-  return value === "ADMIN" || value === "USER";
+  return value === "ADMIN" || value === "USER" || value === "RUNNER";
 };
 
 export const signAccessToken = (payload: AccessTokenPayload) => {
