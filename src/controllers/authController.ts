@@ -14,14 +14,22 @@ import { HttpError } from "../utils/errors";
 type ValidatedBody<T> = { body: T };
 
 export const register = asyncHandler(async (req: Request, res: Response) => {
-  const { email, password, fullName, phone } = (req.validated as ValidatedBody<{
+  const { email, password, fullName, phone, role } = (req.validated as ValidatedBody<{
     email: string;
     password: string;
     fullName: string;
     phone?: string;
+    role?: "USER" | "RUNNER";
   }>).body;
 
-  const user = await registerUser({ email, password, fullName, phone });
+  const user = await registerUser({
+    email,
+    password,
+    fullName,
+    phone,
+    role: role ?? "USER",
+  });
+
   const accessToken = signAccessToken({ userId: user.id, role: user.role });
 
   res.status(201).json({
@@ -29,6 +37,7 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     accessToken,
   });
 });
+
 
 export const login = asyncHandler(async (req: Request, res: Response) => {
   const { email, password } = (req.validated as ValidatedBody<{

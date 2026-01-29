@@ -10,6 +10,7 @@ export const registerUser = async (payload: {
   password: string;
   fullName: string;
   phone?: string | null;
+  role?: "USER" | "RUNNER";
 }) => {
   const existingUser = await prisma.user.findUnique({
     where: { email: payload.email },
@@ -21,12 +22,15 @@ export const registerUser = async (payload: {
 
   const passwordHash = await hashPassword(payload.password);
 
+  // Only allow USER or RUNNER via public registration
+  const role = payload.role === "RUNNER" ? "RUNNER" : "USER";
+
   return prisma.$transaction(async (tx) => {
     const user = await tx.user.create({
       data: {
         email: payload.email,
         passwordHash,
-        role: "USER",
+        role, // ✅ now persists correct role
         profile: {
           create: {
             fullName: payload.fullName,
@@ -40,6 +44,7 @@ export const registerUser = async (payload: {
     return user;
   });
 };
+
 
 export const loginUser = async (payload: { email: string; password: string }) => {
   const user = await prisma.user.findUnique({
