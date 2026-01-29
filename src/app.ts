@@ -9,6 +9,7 @@ import { errorHandler } from "./middleware/errorHandler";
 import { createNotFoundError } from "./utils/errors";
 
 const app = express();
+const apiBasePath = "/api/v1";
 
 const corsOrigins = env.CORS_ORIGIN === "*"
   ? true
@@ -24,14 +25,14 @@ app.use(
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-app.get("/", (_req, res) => {
+app.get(apiBasePath, (_req, res) => {
   res.json({ message: "TaskZip API" });
 });
 
-app.use("/auth", authRoutes);
-app.use("/admin", adminRoutes);
-app.use("/profile", profileRoutes);
-app.use("/health", healthRoutes);
+app.use(`${apiBasePath}/auth`, authRoutes);
+app.use(`${apiBasePath}/admin`, adminRoutes);
+app.use(`${apiBasePath}/profile`, profileRoutes);
+app.use(`${apiBasePath}/health`, healthRoutes);
 
 app.use((_req, _res, next) => {
   next(createNotFoundError("Route not found"));
